@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <stdbool.h>
 
 #define MAX_URL_SIZE 2000
 #define BUFFER_SIZE 1024
@@ -27,7 +28,26 @@ typedef struct HTTP_REQ {
 
 HTTP_REQ generateRequest(const char*);
 void processBuffer(int, char*);
-void processRequest(HTTP_REQ);
+int processRequest(HTTP_REQ, bool);
+char* getRefUrl(char* body);
+
+char* getRefUrl(char* body){
+    static char outUrl[MAX_URL_SIZE];
+    char *url_start=NULL, *url_end=NULL;
+    url_start=strstr(body, "src=");
+    if (url_start == NULL){return NULL;}
+    //printf("FOUND LINK\n");
+    url_start+=5;
+    for (char* i = url_start; i < url_start+MAX_URL_SIZE; i++){
+        if(*i == '"'){
+            url_end = i;
+            break;
+        }
+    }
+    int len = (url_end - url_start)+1;
+    snprintf(outUrl, len, "%s", url_start);
+    return outUrl;
+}
 
 HTTP_REQ generateRequest(const char *URL) {
     HTTP_REQ req = {0};
@@ -102,7 +122,7 @@ void processBuffer(int status, char* buffer){
             sscanf(locationLine, "Location: %[^\n]", buffer_str);
             printf("Redirected Url: %s\n", buffer_str);
             HTTP_REQ req = generateRequest(buffer_str);
-            processRequest(req);
+            processRequest(req, false);
         }else{
             printf("Could not find redirect URL\n");
         }
@@ -110,10 +130,10 @@ void processBuffer(int status, char* buffer){
 
 }
 
-void processRequest(HTTP_REQ req) {
+int processRequest(HTTP_REQ req, bool GET) {
     if (!req.exists) {
         printf("Status: Network Error (DNS resolution failed)\n");
-        return;
+        return -1;
     }
 
     for (req.rp = req.result; req.rp != NULL; req.rp = req.rp->ai_next) {
@@ -132,7 +152,7 @@ void processRequest(HTTP_REQ req) {
     if (req.rp == NULL) {
         printf("Status: Network Error (connection failed)\n");
         freeaddrinfo(req.result);
-        return;
+        return -1;
     }
 
     freeaddrinfo(req.result);
@@ -145,7 +165,7 @@ void processRequest(HTTP_REQ req) {
         if (!req.ctx) {
             fprintf(stderr, "Error creating SSL context\n");
             close(req.sfd);
-            return;
+            return -1;
         }
 
         req.ssl = SSL_new(req.ctx);
@@ -153,7 +173,7 @@ void processRequest(HTTP_REQ req) {
             fprintf(stderr, "Error creating SSL object\n");
             SSL_CTX_free(req.ctx);
             close(req.sfd);
-            return;
+            return -1;
         }
 
         if (!SSL_set_fd(req.ssl, req.sfd)) {
@@ -161,7 +181,7 @@ void processRequest(HTTP_REQ req) {
             SSL_free(req.ssl);
             SSL_CTX_free(req.ctx);
             close(req.sfd);
-            return;
+            return -1;
         }
 
         SSL_set_tlsext_host_name(req.ssl, req.host);
@@ -171,14 +191,20 @@ void processRequest(HTTP_REQ req) {
             SSL_free(req.ssl);
             SSL_CTX_free(req.ctx);
             close(req.sfd);
-            return;
+            return -1;
         }
     }
 
     char sendline[BUFFER_SIZE];
-    snprintf(sendline, BUFFER_SIZE, 
-             "HEAD /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", 
-             req.path[0] ? req.path : "", req.host);
+    if(!GET){
+        snprintf(sendline, BUFFER_SIZE, 
+            "HEAD /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", 
+            req.path[0] ? req.path : "", req.host);
+    }else{
+        snprintf(sendline, BUFFER_SIZE, 
+            "GET /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", 
+            req.path[0] ? req.path : "", req.host);
+    }
 
     if (req.is_https) {
         if (SSL_write(req.ssl, sendline, strlen(sendline)) <= 0) {
@@ -186,13 +212,13 @@ void processRequest(HTTP_REQ req) {
             SSL_free(req.ssl);
             SSL_CTX_free(req.ctx);
             close(req.sfd);
-            return;
+            return -1;
         }
     } else {
         if (write(req.sfd, sendline, strlen(sendline)) < 0) {
             perror("Error sending HTTP request");
             close(req.sfd);
-            return;
+            return -1;
         }
     }
 
@@ -205,22 +231,39 @@ void processRequest(HTTP_REQ req) {
             SSL_CTX_free(req.ctx);
         }
         close(req.sfd);
-        return;
+        return -1;
     }
     req.buffer[bytes_received] = '\0';
 
     int status_code = 0;
-    if (strncmp(req.buffer, "HTTP/", 5) == 0) {
-        char *status_start = strchr(req.buffer, ' ') + 1;
-        if (status_start) {
-            status_code = atoi(status_start);
-            processBuffer(status_code, req.buffer);
-            //printf("Rest of buffer: %s\n", req.buffer);
+    if (!GET){
+        if (strncmp(req.buffer, "HTTP/", 5) == 0) {
+            char *status_start = strchr(req.buffer, ' ') + 1;
+            if (status_start) {
+                status_code = atoi(status_start);
+                processBuffer(status_code, req.buffer);
+                //printf("Rest of buffer: %s\n", req.buffer);
+            } else {
+                printf("Status: Error (invalid response format)\n");
+            }
         } else {
-            printf("Status: Error (invalid response format)\n");
+            printf("Status: Error (non-HTTP response)\n");
         }
-    } else {
-        printf("Status: Error (non-HTTP response)\n");
+    }else{
+        char* refLink = getRefUrl(req.buffer);
+        if(refLink){
+            char url_buffer[MAX_URL_SIZE];
+            url_buffer[0]='\0';
+            if(refLink[0]=='/'){
+                sprintf(url_buffer, "%s%s",req.host, refLink);
+            }else{
+                strcpy(url_buffer, refLink);
+            }
+            printf("Referenced URL: %s\n", url_buffer);
+            HTTP_REQ req = generateRequest(url_buffer);
+            processRequest(req, false);
+        }
+        //puts(req.buffer);
     }
 
     if (req.is_https) {
@@ -229,6 +272,7 @@ void processRequest(HTTP_REQ req) {
     }
     shutdown(req.sfd, SHUT_RDWR);
     close(req.sfd);
+    return status_code;
 }
 
 int main(int argc, char *argv[]) {
@@ -245,10 +289,15 @@ int main(int argc, char *argv[]) {
 
     char url_buffer[MAX_URL_SIZE];
     while (fgets(url_buffer, MAX_URL_SIZE, file)) {
+        //printf("<====NEW LINK====>\n");
         url_buffer[strcspn(url_buffer, "\n")] = '\0';
         printf("URL: %s\n", url_buffer);
         HTTP_REQ req = generateRequest(url_buffer);
-        processRequest(req);
+        int retStat = processRequest(req,false);
+        if(retStat == 200){
+            HTTP_REQ getReq = generateRequest(url_buffer);
+            processRequest(getReq, true);
+        }
         puts("");
     }
 
