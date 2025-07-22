@@ -291,7 +291,10 @@ int main(int argc, char *argv[]) {
     char url_buffer[MAX_URL_SIZE];
     while (fgets(url_buffer, MAX_URL_SIZE, file)) {
         //printf("<====NEW LINK====>\n");
-        url_buffer[strcspn(url_buffer, "\n")] = '\0';
+        char* endLine = "\n";
+        if(strchr(url_buffer, '\r'))
+            endLine = "\r";
+        url_buffer[strcspn(url_buffer, endLine)] = '\0';
         printf("URL: %s\n", url_buffer);
         HTTP_REQ req = generateRequest(url_buffer);
         int retStat = processRequest(req,false);

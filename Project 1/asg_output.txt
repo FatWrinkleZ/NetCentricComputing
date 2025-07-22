@@ -1,0 +1,32 @@
+URL: http://fiu.gov
+Status: Network Error (DNS resolution failed)
+
+URL: http://inet.cs.fiu.edu/
+Status: 200 OK
+
+URL: http://google.com/404
+Status: 404 Not Found
+
+URL: http://google.com/
+Status: 301 Moved Permanently
+Redirected Url: http://www.google.com/
+Status: 200 OK
+
+URL: http://inet.cs.fiu.edu/temp/deny.html
+Status: 302 Found
+Redirected Url: http://inet.cs.fiu.edu/temp/denied.html
+Status: 400 Bad Request
+
+URL: http://inet.cs.fiu.edu/page.html
+Status: 200 OK
+Referenced URL: inet.cs.fiu.edu/fiu.jpg
+Status: 200 OK
+
+URL: http://inet.cs.fiu.edu/temp/page.html
+Status: 200 OK
+Referenced URL: http://inet.cs.fiu.edu/temp/fiu.jpg
+Status: 404 Not Found
+
+URL: https://www.fiu.edu
+Status: 200 OK
+
